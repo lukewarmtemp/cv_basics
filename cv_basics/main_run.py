@@ -57,7 +57,7 @@ import os
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 PARSIGHT_PATH = "./src/ParSight/ParSight"
-model = YOLO("/home/jetson/flyrs_ws/src/ParSight/ParSight/models/best_128.engine")
+model = YOLO("/home/jetson/flyrs_ws/src/ParSight/ParSight/models/best_128_s.engine")
 bridge = CvBridge()
 print(torch.cuda.is_available())
 print("Running on:", model.device)
@@ -86,10 +86,10 @@ class SegDroneControlNode(Node):
         # MAVROS VARIABLE SETUP
 
         # generally how high above the ball we fly
-        self.desired_flight_height = 1.0
+        self.desired_flight_height = 1.5
         self.max_searching_height = 1.5
-        self.square_size = 1.0
-        self.bounds = {"x_min": -1*self.square_size, "x_max": self.square_size, "y_min": -1*self.square_size, "y_max": self.square_size, "z_min": 0.0, "z_max": 1.0}
+        self.square_size = 2.0
+        self.bounds = {"x_min": -1*self.square_size, "x_max": self.square_size, "y_min": -1*self.square_size, "y_max": self.square_size, "z_min": 0.0, "z_max": self.square_size}
 
         # for vision_pose to know where it is
         self.position = Point()
@@ -279,10 +279,48 @@ class SegDroneControlNode(Node):
         # Publish the message to the /mavros/setpoint_position/local topic
         self.setpoint_publisher.publish(setpoint_msg)
 
+    # def adaptive_gamma(self, frame):
+    #     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    #     mean_lum = np.mean(gray)
+    #     gamma = np.clip(1.0 + (127 - mean_lum) / 127, 0.5, 2.0)
+    #     return gamma
+
+    # def preprocess_image(self, frame):
+    #     # Convert to LAB color space for CLAHE
+    #     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    #     l, a, b = cv2.split(lab)
+
+    #     # Apply CLAHE to the L-channel
+    #     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    #     cl = clahe.apply(l)
+
+    #     # Merge channels and convert back to BGR
+    #     limg = cv2.merge((cl, a, b))
+    #     frame_clahe = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+    #     # Optional: Gamma correction
+    #     # gamma = 1.5  # You can adjust or make this adaptive
+
+    #     # Get adaptive gamma based on brightness
+    #     gamma = self.adaptive_gamma(frame_clahe)
+
+    #     invGamma = 1.0 / gamma
+    #     table = np.array([(i / 255.0) ** invGamma * 255 for i in np.arange(0, 256)]).astype("uint8")
+    #     frame_gamma = cv2.LUT(frame_clahe, table)
+
+    #     return frame_gamma
+
+
+
+
     def frame_input_callback(self, msg):
         # convert ROS Image message to OpenCV image
         current_frame = self.br.imgmsg_to_cv2(msg)
         # run the yolo segmentation
+
+        # preprocessed_frame = self.preprocess_image(current_frame)
+        # self.image_data, self.bbox_data, self.confidence_data = self.run_yolo_segmentation(preprocessed_frame)
+
         self.image_data, self.bbox_data, self.confidence_data = self.run_yolo_segmentation(current_frame)
         if self.bbox_data != [-1, -1, -1, -1]: self.valid_bbox = True; self.yes_bbox_got = True
         else: self.valid_bbox = False
@@ -304,7 +342,7 @@ class SegDroneControlNode(Node):
         # start_time = time.time()
 
         # apply a confidence threshold
-        results = model(frame, imgsz=128, conf=0.4, verbose=True)
+        results = model(frame, imgsz=128, conf=0.0, verbose=True)
         # initialize variables for the highest confidence detection
         best_conf, best_bbox = 0, None
         # cycle through all found bboxes
@@ -314,7 +352,7 @@ class SegDroneControlNode(Node):
                 x_min, y_min, x_max, y_max, conf, cls = det.tolist()
                 conf = float(conf)
                 # filter low confidence out
-                if conf < 0.2: continue
+                if conf < 0.1: continue
                 # check if this is the highest confidence so far
                 if conf > best_conf:
                     best_conf = conf
@@ -385,7 +423,7 @@ class SegDroneControlNode(Node):
     #     print("set pose:" + self.set_position)
     #     print("pose:" + self.position)
         
-    def move_drone(self, offset_x_pixels, offset_y_pixels, move_size=0.005, pixel_tol=50):
+    def move_drone(self, offset_x_pixels, offset_y_pixels, move_size=0.08, pixel_tol=10):
         vector_length = (offset_x_pixels ** 2 + offset_y_pixels ** 2) ** 0.5
         print("moving drone triggered", vector_length)
         if vector_length <= pixel_tol: 
@@ -396,10 +434,13 @@ class SegDroneControlNode(Node):
         scaled_y = (offset_y_pixels / vector_length) * move_size
         # update the drone's position with the scaled values
         if self.testing == True:
-            self.set_position.x = self.position.x + scaled_x
-            self.set_position.y = self.position.y + scaled_y
+            # self.set_position.x = self.position.x + scaled_x
+            # self.set_position.y = self.position.y + scaled_y
+            self.set_position.x = self.position.x - scaled_y
+            self.set_position.y = self.position.y - scaled_x
+            # self.set_position.x =  - scaled_y
+            # self.set_position.y =  - scaled_x
             self.set_position.z = self.desired_flight_height
-
         # print(self.set_position, "||", self.position)
         return
 

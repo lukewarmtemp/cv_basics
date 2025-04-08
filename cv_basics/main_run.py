@@ -57,7 +57,7 @@ import os
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 PARSIGHT_PATH = "./src/ParSight/ParSight"
-model = YOLO("/home/jetson/flyrs_ws/src/ParSight/ParSight/models/best_128_s.engine")
+model = YOLO("/home/jetson/flyrs_ws/src/ParSight/ParSight/models/best_128_new.engine")
 bridge = CvBridge()
 print(torch.cuda.is_available())
 print("Running on:", model.device)
@@ -70,7 +70,7 @@ print("Running on:", model.device)
 
 class SegDroneControlNode(Node):
 
-    def __init__(self, test_type, drone_pose_tool):
+    def __init__(self, test_type):
         super().__init__('seg_drone_control_node') 
 
         ###############
@@ -85,11 +85,17 @@ class SegDroneControlNode(Node):
         #######################
         # MAVROS VARIABLE SETUP
 
-        # generally how high above the ball we fly
-        self.desired_flight_height = 1.5
-        self.max_searching_height = 1.5
-        self.square_size = 2.0
-        self.bounds = {"x_min": -1*self.square_size, "x_max": self.square_size, "y_min": -1*self.square_size, "y_max": self.square_size, "z_min": 0.0, "z_max": self.square_size}
+        # tuning parameters
+        self.desired_flight_height = 1.8    # height we fly at
+        self.max_searching_height = 2.0     # safety on top height
+        self.square_size = 3.0              # safety on the side movement
+        self.threshold_confidence = 0.2     # yolo segmentation
+        self.move_amount = 0.30             # how much to assign movement per frame
+        self.frame_pixel_tol = 5            # how to center to only hover
+        self.jump_pixel_threshold = 20      # for dynamic motion
+
+        # safety net on the ball
+        self.bounds = {"x_min": -1*self.square_size, "x_max": self.square_size, "y_min": -1*self.square_size, "y_max": self.square_size, "z_min": 0.0, "z_max": self.max_searching_height}
 
         # for vision_pose to know where it is
         self.position = Point()
@@ -106,28 +112,31 @@ class SegDroneControlNode(Node):
         # IMAGE VARIABLE SETUP
 
         # init class attributes to store msg: image, bbox, confidence, and validity
-        self.drone_pose_tool = drone_pose_tool
-        self.image_data = None
-        self.bbox_data = None
-        self.confidence_data = None
+        self.image_data = None              # from segmentation (raw)      
+        self.bbox_data = None               # from segmentation (raw)      
+        self.confidence_data = None         # from segmentation (raw)      
+        self.curr_bbox = None               # used for tracking when valid
+        self.last_bbox = None               # dynamic matching 
+        self.bbox_counting = 0              # 
+        self.bbox_counting_max = 3
+
+        # booleans for enabling testing
+        self.testing = False
         self.valid_bbox = False
         self.yes_bbox_got = False
         self.cut_looping = False
-        self.curr_bbox = None
 
         # camera parameters
-        self.REAL_DIAMETER_MM = 42.67  # Standard golf ball diameter in mm
-        self.FOCAL_LENGTH_MM = 26      # iPhone 14 Plus main camera focal length in mm
-        self.SENSOR_WIDTH_MM = 4.93     # Approximate sensor size: 5.095 mm (H) × 4.930 mm (W)
-        self.DOWN_SAMPLE_FACTOR = 4    # Downsample factor used in YOLO model
+        self.REAL_DIAMETER_MM = 42.67       # Standard golf ball diameter in mm
+        self.FOCAL_LENGTH_MM = 26           # iPhone 14 Plus main camera focal length in mm
+        self.SENSOR_WIDTH_MM = 4.93         # Approximate sensor size: 5.095 mm (H) × 4.930 mm (W)
+        self.DOWN_SAMPLE_FACTOR = 4         # Downsample factor used in YOLO model
 
         # frame parameters (updated in first frame)
         self.frame_width, self.frame_height = None, None
         self.camera_frame_center = None
         self.FOCAL_LENGTH_PIXELS = None
         
-        self.testing = False
-
         ############################
         # SUBSCRIBER/PUBLISHER SETUP
 
@@ -181,9 +190,7 @@ class SegDroneControlNode(Node):
 
     def callback_abort(self, request, response):
         print('Abort Requested. Drone will land immediately due to safety considerations.')
-        self.set_position.z = 0.0
-        response.success = True
-        response.message = "Success"
+        self.abort_procedure()
         return response
 
     ################################################
@@ -196,24 +203,28 @@ class SegDroneControlNode(Node):
         # once the ball is detected, lower the drone to the desired height
         # center the drone over the ball
         # capture the current position for landing
-        # TODO
         self.set_pose_initial()
         self.set_position.z = self.desired_flight_height
         return
 
     def testing_procedure(self):
         # set the drone to continuously hover and track the ball
-        # TODO
         self.testing = True
         return
 
     def landing_procedure(self):
         # drone will land at the captured position (back where the people are)
         # also at a lower height
-        # TODO
         self.testing = False
         self.set_position.z = 0.1
         return
+
+    def abort_procedure(self):
+        # safety land will just immediately lower the drone
+        self.testing = False
+        self.set_position.z = 0.0
+        response.success = True
+        response.message = "Success"
 
     ################################################
     # CALLBACKS
@@ -272,66 +283,21 @@ class SegDroneControlNode(Node):
         setpoint_msg.header.frame_id = self.frame_id
         setpoint_msg.pose.position = current_position
         setpoint_msg.pose.orientation = self.set_orientation
-        # print(f"Position: x={self.set_position.x}, y={self.set_position.y}, z={self.set_position.z}")
-        # print(f"Orientation: x={self.orientation.x}, y={self.orientation.y}, z={self.orientation.z}, w={self.orientation.w}")
-        # print(f"Timestamp: {self.timestamp.sec}.{self.timestamp.nanosec}")
-        # print(f"Frame ID: {self.frame_id}")
         # Publish the message to the /mavros/setpoint_position/local topic
         self.setpoint_publisher.publish(setpoint_msg)
-
-    # def adaptive_gamma(self, frame):
-    #     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    #     mean_lum = np.mean(gray)
-    #     gamma = np.clip(1.0 + (127 - mean_lum) / 127, 0.5, 2.0)
-    #     return gamma
-
-    # def preprocess_image(self, frame):
-    #     # Convert to LAB color space for CLAHE
-    #     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    #     l, a, b = cv2.split(lab)
-
-    #     # Apply CLAHE to the L-channel
-    #     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    #     cl = clahe.apply(l)
-
-    #     # Merge channels and convert back to BGR
-    #     limg = cv2.merge((cl, a, b))
-    #     frame_clahe = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-
-    #     # Optional: Gamma correction
-    #     # gamma = 1.5  # You can adjust or make this adaptive
-
-    #     # Get adaptive gamma based on brightness
-    #     gamma = self.adaptive_gamma(frame_clahe)
-
-    #     invGamma = 1.0 / gamma
-    #     table = np.array([(i / 255.0) ** invGamma * 255 for i in np.arange(0, 256)]).astype("uint8")
-    #     frame_gamma = cv2.LUT(frame_clahe, table)
-
-    #     return frame_gamma
-
-
-
 
     def frame_input_callback(self, msg):
         # convert ROS Image message to OpenCV image
         current_frame = self.br.imgmsg_to_cv2(msg)
         # run the yolo segmentation
-
-        # preprocessed_frame = self.preprocess_image(current_frame)
-        # self.image_data, self.bbox_data, self.confidence_data = self.run_yolo_segmentation(preprocessed_frame)
-
         self.image_data, self.bbox_data, self.confidence_data = self.run_yolo_segmentation(current_frame)
         if self.bbox_data != [-1, -1, -1, -1]: self.valid_bbox = True; self.yes_bbox_got = True
         else: self.valid_bbox = False
         # these are just print statements
-        print(f"Received image with bbox: {self.bbox_data} and confidence: {self.confidence_data}")
-        # print(f"Valid BBox: {self.valid_bbox}")
+        print(f"RECEIVED: || BBox: {self.bbox_data} || Conf: {self.confidence_data}")
         ########################################################
         # then we go into any image processing
         self.full_image_processing()
-        # cv2.imshow("camera", current_frame)
-        # cv2.waitKey(1)
         return
 
     ################################################
@@ -339,8 +305,6 @@ class SegDroneControlNode(Node):
     ################################################
 
     def run_yolo_segmentation(self, frame):
-        # start_time = time.time()
-
         # apply a confidence threshold
         results = model(frame, imgsz=128, conf=0.0, verbose=True)
         # initialize variables for the highest confidence detection
@@ -352,29 +316,43 @@ class SegDroneControlNode(Node):
                 x_min, y_min, x_max, y_max, conf, cls = det.tolist()
                 conf = float(conf)
                 # filter low confidence out
-                if conf < 0.1: continue
+                if conf < self.threshold_confidence: continue
                 # check if this is the highest confidence so far
                 if conf > best_conf:
                     best_conf = conf
                     best_bbox = [int(x_min), int(y_min), int(x_max), int(y_max)]
         # drawing the bounding box on the frame
         if best_bbox is not None:
-            # draw the bounding box on the frame
-            cv2.rectangle(frame, (best_bbox[0], best_bbox[1]), (best_bbox[2], best_bbox[3]), (0, 255, 0), 2)
-            label = f'Conf: {best_conf:.2f}'
-            cv2.putText(frame, label, (best_bbox[0], best_bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            #cv2.imshow("BB Frame",frame)
-            #cv2.waitKey(10)
+            # something was recieved, we now want to make sure it's possible
+            if self.last_bbox is not None:
+                # we maybe segmented a false positive, assume instead nothing was recieved
+                x_cur, y_cur = self.find_center_point(best_bbox)
+                x_last, y_last = self.find_center_point(self.last_bbox)
+                x_off, y_off = x_cur-x_last, y_cur-y_last
+                if self.calculate_pixel_difference(x_off, y_off) > self.jump_pixel_threshold: 
+                    best_bbox, conf = [-1, -1, -1, -1], -2
+                    self.bbox_counting += 1
+                    print("----------------------------------------JUMPED")
+                else:
+                    # draw the bounding box on the frame
+                    cv2.rectangle(frame, (best_bbox[0], best_bbox[1]), (best_bbox[2], best_bbox[3]), (0, 255, 0), 1)
+                    label = f'Conf: {best_conf:.2f}'
+                    cv2.putText(frame, label, (best_bbox[0]-5, best_bbox[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            else:
+                # draw the bounding box on the frame
+                cv2.rectangle(frame, (best_bbox[0], best_bbox[1]), (best_bbox[2], best_bbox[3]), (0, 255, 0), 1)
+                label = f'Conf: {best_conf:.2f}'
+                cv2.putText(frame, label, (best_bbox[0]-5, best_bbox[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        # if no valid bounding box found
+        else: 
+            best_bbox, conf = [-1, -1, -1, -1], -1
+        # always publish the images regadless if a frame was drawn in or not
         self.image_publisher.publish(bridge.cv2_to_imgmsg(frame))
-        # if no valid bounding box found, set it to [-1, -1, -1, -1]
-        if best_bbox is None:
-            best_bbox = [-1, -1, -1, -1]
-            conf = -1
-        
-        # end_time = time.time()
-        # total_time = end_time - start_time
-        # print(total_time, best_bbox)
-
+        # reset last bbox if for too long, the jumping is being bad
+        if self.bbox_counting >= self.bbox_counting_max:
+            self.bbox_counting = 0
+            self.last_bbox = None
+        # send raw results
         return frame, best_bbox, conf
 
     def full_image_processing(self):
@@ -384,97 +362,50 @@ class SegDroneControlNode(Node):
         if self.valid_bbox: self.curr_bbox = self.bbox_data
         # then everytime we get the distances
         if self.yes_bbox_got:
-            distance_m, offset_x_m, offset_y_m, offset_x_pixels, offset_y_pixels = self.calculate_golf_ball_metrics()
+            offset_x_pixels, offset_y_pixels = self.mini_calculate_golf_ball_metrics()
             # then based on how far off we are, instruct the drone's setpoint to move that much
             self.move_drone(offset_x_pixels, offset_y_pixels)
-            # if self.drone_pose_tool == 'pixel':
-            #     self.move_drone_p(offset_x_pixels, offset_y_pixels)
-            # elif self.drone_pose_tool == 'meter':
-            #     self.move_drone_m(distance_m, offset_x_m, offset_y_m)
-
-    def calculate_golf_ball_metrics(self):
-        # unpack all the values from the bounding box and calculate the diameter
-        x1, y1, x2, y2 = self.curr_bbox
-        bbox_width, bbox_height = x2 - x1, y2 - y1
-        # if the ball is cut off on the edges, choose the larger dimension
-        if x1 <= 0 or y1 <= 0 or x2 >= self.frame_width or y2 >= self.frame_height: diameter_pixels = max(bbox_width, bbox_height)
-        else: diameter_pixels = (bbox_width + bbox_height) / 2
-        # compute the golf ball's center
-        ball_center_x, ball_center_y = x1 + bbox_width / 2, y1 + bbox_height / 2
-        image_center_x, image_center_y = self.camera_frame_center
-        # compute the distance to the ball
-        distance_mm = (self.REAL_DIAMETER_MM * self.FOCAL_LENGTH_PIXELS) / diameter_pixels
-        distance_m = distance_mm / 1000 
+            self.last_bbox = self.curr_bbox
+    
+    def mini_calculate_golf_ball_metrics(self):
         # calculate ball and image centers (in pixel coordinates)
+        ball_center_x, ball_center_y = self.find_center_point(self.curr_bbox)
+        image_center_x, image_center_y = self.camera_frame_center
         offset_x_pixels, offset_y_pixels = ball_center_x - image_center_x, ball_center_y - image_center_y
-        offset_x_m = self.pixels_to_meters(offset_x_pixels, distance_m)
-        offset_y_m = self.pixels_to_meters(offset_y_pixels, distance_m)
-        return distance_m, offset_x_m, offset_y_m, offset_x_pixels, offset_y_pixels
-
-    # def move_drone_m(self, offset_x_m, offset_y_m, step_size=0.01):
-    #     vector_length = (offset_x_m ** 2 + offset_y_m ** 2) ** 0.5
-    #     if vector_length == 0: return
-    #     scaled_x = (offset_x_m / vector_length) * step_size
-    #     scaled_y = (offset_y_m / vector_length) * step_size
-    #     # update the drone's position with the scaled values
-    #     self.set_position.x = self.position.x + scaled_x
-    #     self.set_position.y = self.position.y + scaled_y
-    #     self.set_position.z = self.desired_flight_height
-    #     print("set pose:" + self.set_position)
-    #     print("pose:" + self.position)
-        
-    def move_drone(self, offset_x_pixels, offset_y_pixels, move_size=0.08, pixel_tol=10):
-        vector_length = (offset_x_pixels ** 2 + offset_y_pixels ** 2) ** 0.5
+        return offset_x_pixels, offset_y_pixels
+ 
+    def move_drone(self, offset_x_pixels, offset_y_pixels):
+        # calculate the vector length
+        vector_length = self.calculate_pixel_difference(offset_x_pixels, offset_y_pixels)
         print("moving drone triggered", vector_length)
-        if vector_length <= pixel_tol: 
-            print("hovering")
-            return
-        print("MOVE")
-        scaled_x = (offset_x_pixels / vector_length) * move_size
-        scaled_y = (offset_y_pixels / vector_length) * move_size
+        # if the length is close enough, no change to setpoint, we don't move
+        if vector_length <= self.frame_pixel_tol: print("*** HOVERING ***"); return
+        # if we made it past here, then we want to move
+        print("*** MOVE ***")
+        scaled_x = (offset_x_pixels / vector_length) * self.move_amount
+        scaled_y = (offset_y_pixels / vector_length) * self.move_amount
         # update the drone's position with the scaled values
-        if self.testing == True:
-            # self.set_position.x = self.position.x + scaled_x
-            # self.set_position.y = self.position.y + scaled_y
+        if self.testing:
             self.set_position.x = self.position.x - scaled_y
             self.set_position.y = self.position.y - scaled_x
-            # self.set_position.x =  - scaled_y
-            # self.set_position.y =  - scaled_x
             self.set_position.z = self.desired_flight_height
-        # print(self.set_position, "||", self.position)
         return
 
-    
-
-    # def move_drone_p(self, offset_x_pixels, offset_y_pixels,  tolerance=50):
-    #     # If the drone is close enough to the center, just hover
-    #     if abs(offset_x_pixels) <= tolerance and abs(offset_y_pixels) <= tolerance:
-    #         print("Move: Hovering")
-    #         return
-    #     if abs(offset_x_pixels) >= 4 * abs(offset_y_pixels):
-    #         if offset_x_pixels > 0:
-    #             print("Move: Right")
-    #         else:
-    #             print("Move: Left")
-    #     elif abs(offset_y_pixels) >= 4 * abs(offset_x_pixels):
-    #         if offset_y_pixels > 0:
-    #             print("Move: Forward")
-    #         else:
-    #             print("Move: Backward")
-    #     else:
-    #         # Handles diagonal movements
-    #         if offset_x_pixels > 0 and offset_y_pixels > 0:
-    #             print("Move: Forward Right")
-    #         elif offset_x_pixels > 0 and offset_y_pixels < 0:
-    #             print("Move: Backward Right")
-    #         elif offset_x_pixels < 0 and offset_y_pixels > 0:
-    #             print("Move: Forward Left")
-    #         elif offset_x_pixels < 0 and offset_y_pixels < 0:
-    #             print("Move: Backward Left")
 
     ################################################
     # IMAGE PROCESSING HELPERS
     ################################################
+
+    def find_center_point(self, bbox):
+        x1, y1, x2, y2 = bbox
+        bbox_width, bbox_height = x2 - x1, y2 - y1
+        ball_center_x, ball_center_y = x1 + bbox_width / 2, y1 + bbox_height / 2
+        return ball_center_x, ball_center_y
+
+    def calculate_pixel_difference(self, x, y):
+        # calculate vector lengths
+        vector_length = (x ** 2 + y ** 2) ** 0.5
+        return vector_length
 
     def imgmsg_to_numpy(self, ros_image):
         # helper to convert ROS image to numpy array
@@ -487,14 +418,6 @@ class SegDroneControlNode(Node):
         self.FOCAL_LENGTH_PIXELS = ((self.FOCAL_LENGTH_MM / self.SENSOR_WIDTH_MM) * self.frame_width) / self.DOWN_SAMPLE_FACTOR
         return
 
-    def pixels_to_meters(self, pixel_offset, distance_m):
-        # Compute displacement in mm, then convert to meters
-        return (distance_m / self.FOCAL_LENGTH_PIXELS) * pixel_offset
-
-    def meters_to_pixels(self, offset_m, distance_m):
-        # Convert offset to mm, then compute pixel displacement
-        return (offset_m * self.FOCAL_LENGTH_PIXELS) / distance_m
-
     def set_pose_initial(self):
         # Put the current position into maintained position
         self.set_position.x = 0.0
@@ -505,16 +428,45 @@ class SegDroneControlNode(Node):
         self.set_orientation.z = 0.0
         self.set_orientation.w = -1.0
 
+    ################################################
+    # IMAGE PROCESSING HELPERS
+    ################################################
+
+    # def pixels_to_meters(self, pixel_offset, distance_m):
+    #     # Compute displacement in mm, then convert to meters
+    #     return (distance_m / self.FOCAL_LENGTH_PIXELS) * pixel_offset
+
+    # def meters_to_pixels(self, offset_m, distance_m):
+    #     # Convert offset to mm, then compute pixel displacement
+    #     return (offset_m * self.FOCAL_LENGTH_PIXELS) / distance_m
+
+    # def calculate_golf_ball_metrics(self):
+    #     # unpack all the values from the bounding box and calculate the diameter
+    #     x1, y1, x2, y2 = self.curr_bbox
+    #     bbox_width, bbox_height = x2 - x1, y2 - y1
+    #     # if the ball is cut off on the edges, choose the larger dimension
+    #     if x1 <= 0 or y1 <= 0 or x2 >= self.frame_width or y2 >= self.frame_height: diameter_pixels = max(bbox_width, bbox_height)
+    #     else: diameter_pixels = (bbox_width + bbox_height) / 2
+    #     # compute the golf ball's center
+    #     ball_center_x, ball_center_y = x1 + bbox_width / 2, y1 + bbox_height / 2
+    #     image_center_x, image_center_y = self.camera_frame_center
+    #     # compute the distance to the ball
+    #     distance_mm = (self.REAL_DIAMETER_MM * self.FOCAL_LENGTH_PIXELS) / diameter_pixels
+    #     distance_m = distance_mm / 1000 
+    #     # calculate ball and image centers (in pixel coordinates)
+    #     offset_x_pixels, offset_y_pixels = ball_center_x - image_center_x, ball_center_y - image_center_y
+    #     offset_x_m = self.pixels_to_meters(offset_x_pixels, distance_m)
+    #     offset_y_m = self.pixels_to_meters(offset_y_pixels, distance_m)
+    #     return distance_m, offset_x_m, offset_y_m, offset_x_pixels, offset_y_pixels
+
 ################################################
 # MAIN EXECUTION
 ################################################
 
-
 def main(args=None):
     rclpy.init(args=args)
     test_type = "vicon"
-    drone_pose_tool = "meter"
-    node = SegDroneControlNode(test_type, drone_pose_tool)
+    node = SegDroneControlNode(test_type)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

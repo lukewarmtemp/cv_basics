@@ -9,7 +9,7 @@ from rosidl_runtime_py.utilities import get_message
 
 # === CONFIG ===
 bag_folder = "/home/jetson/flyrs_ws/rosbag_catapult_working"   # folder containing metadata.yaml and data_0.db3
-image_topic = "/camera/segmented"       # topic used during flight
+image_topic = "/camera/image_raw"       # topic used during flight
 db_file = os.path.join(bag_folder, "rosbag2_2025_04_11-11_16_18_0.db3")
 output_csv = "ball_distances.csv"
 output_img_dir = "extracted_frames"

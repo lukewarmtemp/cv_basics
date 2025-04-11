@@ -12,7 +12,7 @@ bag_folder = "/home/jetson/flyrs_ws/rosbag_catapult_working"   # folder containi
 image_topic = "/camera/image_raw"       # topic used during flight
 db_file = os.path.join(bag_folder, "rosbag2_2025_04_11-11_16_18_0.db3")
 output_csv = "ball_distances.csv"
-output_img_dir = "extracted_frames"
+output_img_dir = "extracted_frames_raw"
 
 start_frame = 454
 end_frame = 1078

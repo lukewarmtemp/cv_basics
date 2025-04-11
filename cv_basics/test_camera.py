@@ -31,6 +31,8 @@ except ModuleNotFoundError:
     from Queue import Queue
 import threading
 
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+# qos_profile = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, depth=1)
 
 ################################################
 # Class Nodes
@@ -38,35 +40,35 @@ import threading
 
 
 # threaded frame reader to get frames from camera
-class FrameReader(threading.Thread):
+# class FrameReader(threading.Thread):
 
-    # queues to store frames
-    queues = []
-    _running = True
+#     # queues to store frames
+#     queues = []
+#     _running = True
 
-    def __init__(self, camera, name):
-        super().__init__()
-        self.name = name
-        self.camera = camera
+#     def __init__(self, camera, name):
+#         super().__init__()
+#         self.name = name
+#         self.camera = camera
 
-    def run(self):
-        while self._running:
-            ret, frame = self.camera.read()
-            if ret:
-                # push all frames into the queue
-                for queue in self.queues:
-                    queue.put(frame)
+#     def run(self):
+#         while self._running:
+#             ret, frame = self.camera.read()
+#             if ret:
+#                 # push all frames into the queue
+#                 for queue in self.queues:
+#                     queue.put(frame)
 
-    def addQueue(self, queue):
-        self.queues.append(queue)
+#     def addQueue(self, queue):
+#         self.queues.append(queue)
 
-    def getFrame(self, timeout=None):
-        queue = Queue(1)
-        self.addQueue(queue)
-        return queue.get(timeout=timeout)
+#     def getFrame(self, timeout=None):
+#         queue = Queue(1)
+#         self.addQueue(queue)
+#         return queue.get(timeout=timeout)
 
-    def stop(self):
-        self._running = False
+#     def stop(self):
+#         self._running = False
 
 
 # ros2 camera node
@@ -75,7 +77,7 @@ class RGBCameraNode(Node):
     def __init__(self, cap):
         super().__init__('rgb_camera_node')
         # initiate the node
-        self.publisher_ = self.create_publisher(Image, 'camera/image_raw', 1)
+        self.publisher_ = self.create_publisher(Image, 'camera/image_raw', 1) # qos_profile)
         self.bridge = CvBridge()
         #self.timer = self.create_timer(0.1, self.publish_frame)  # 10 Hz (We can go up to 120 Fps)
         self.cap = cap
@@ -84,10 +86,10 @@ class RGBCameraNode(Node):
         if not self.cap.isOpened():
             self.get_logger().error("Failed to open camera!")
             raise RuntimeError("Failed to open camera!")
-        self.frame_reader = FrameReader(self.cap, "FrameReader")
-        self.frame_reader.start()
+        # self.frame_reader = FrameReader(self.cap, "FrameReader")
+        # self.frame_reader.start()
 
-        timer_period = 0.0017 # seconds
+        timer_period = 0.01 # 0.017 # seconds
       
         # Create the timer
         self.timer = self.create_timer(timer_period, self.timer_callback)

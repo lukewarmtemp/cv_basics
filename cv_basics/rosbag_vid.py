@@ -6,8 +6,8 @@ from cv_bridge import CvBridge
 import rospy
 
 # CONFIG
-bag_file = "your_file.bag"
-image_topic = "/camera/image_raw"
+bag_file = "~/rosbag2_2025_04_08-14_43_17/rosbag2_2025_04_08-14_43_17_0.db3"
+image_topic = "/camera/segmented"
 output_video = "output.mp4"
 fps = 60  # Or compute from timestamps
 

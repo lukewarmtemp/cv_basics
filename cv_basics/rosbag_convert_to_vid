@@ -1,0 +1,25 @@
+import rclpy
+from rclpy.serialization import deserialize_message
+from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+from sensor_msgs.msg import Image
+import cv2
+from cv_bridge import CvBridge
+
+reader = SequentialReader()
+reader.open(
+    StorageOptions(uri='~/rosbag2_2025_04_08-14_43_17/rosbag2_2025_04_08-14_43_17_0.db3', storage_id='sqlite3'),
+    ConverterOptions('', '')
+)
+
+bridge = CvBridge()
+video_writer = cv2.VideoWriter('output.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, (640, 480))
+
+reader.seek(0)
+while reader.has_next():
+    (topic, data, t) = reader.read_next()
+    if topic == '/camera/image_raw':  # Replace with your topic
+        msg = deserialize_message(data, Image)
+        cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        video_writer.write(cv_image)
+
+video_writer.release()

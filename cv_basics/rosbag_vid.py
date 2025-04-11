@@ -6,10 +6,10 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 # === CONFIG ===
-bag_folder = "/home/jetson/flyrs_ws/rosbag_catapult_working"  # directory containing metadata.yaml and data_0.db3
-image_topic = "/camera/image_raw"  # Replace with your actual image topic
-output_dir = "saved_frames_ros2_raw_new"
-db_file = os.path.join(bag_folder, "rosbag2_2025_04_11-11_16_18_0.db3")
+bag_folder = "/home/jetson/flyrs_ws/rosbag2_2025_04_02-14_03_16"  # directory containing metadata.yaml and data_0.db3
+image_topic = "/camera/segmented"  # Replace with your actual image topic
+output_dir = "yolo_seg"
+db_file = os.path.join(bag_folder, "rosbag2_2025_04_02-14_03_16_0.db3")
 
 # === SETUP ===
 os.makedirs(output_dir, exist_ok=True)

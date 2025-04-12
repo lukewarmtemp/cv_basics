@@ -1,36 +1,61 @@
-#!/usr/bin/env python
-
-import rosbag
+import sqlite3
+import os
 import cv2
 from cv_bridge import CvBridge
-import rospy
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
 
-# CONFIG
-bag_file = "~/rosbag2_2025_04_08-14_43_17/rosbag2_2025_04_08-14_43_17_0.db3"
-image_topic = "/camera/segmented"
-output_video = "output.mp4"
-fps = 60  # Or compute from timestamps
+# === CONFIG ===
+bag_folder = "/home/jetson/flyrs_ws/rosbag_catapult_working"  # directory containing metadata.yaml and data_0.db3
+image_topic = "/camera/segmented"  # Replace with your actual image topic
+output_dir = "saved_frames_ros2"
+db_file = os.path.join(bag_folder, "rosbag2_2025_04_11-11_16_18_0.db3")
 
+# === SETUP ===
+os.makedirs(output_dir, exist_ok=True)
 bridge = CvBridge()
 
-# Open bag
-bag = rosbag.Bag(bag_file, 'r')
+# Connect to ROS 2 bag database
+conn = sqlite3.connect(db_file)
+cursor = conn.cursor()
 
-# Get image size from the first frame
-for topic, msg, t in bag.read_messages(topics=[image_topic]):
-    cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-    height, width, _ = cv_image.shape
-    break
+# Get topic ID for the image topic
+cursor.execute("SELECT id FROM topics WHERE name = ?", (image_topic,))
+row = cursor.fetchone()
 
-# Video writer
-fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-video_writer = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+if not row:
+    print(f"Topic '{image_topic}' not found in the bag.")
+    exit()
 
-# Write frames
-for topic, msg, t in bag.read_messages(topics=[image_topic]):
-    cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-    video_writer.write(cv_image)
+topic_id = row[0]
+msg_type = get_message("sensor_msgs/msg/Image")
 
-bag.close()
-video_writer.release()
-print("✅ Video saved as:", output_video)
+# Query and save frames
+cursor.execute("SELECT timestamp, data FROM messages WHERE topic_id = ?", (topic_id,))
+rows = cursor.fetchall()
+
+print(f"Found {len(rows)} image messages. Saving...")
+
+for i, (timestamp, data) in enumerate(rows):
+    try:
+        img_msg = deserialize_message(data, msg_type)
+
+        # Handle the encoding manually if needed
+        if img_msg.encoding == "8UC3":
+            # Treat as BGR manually
+            cv_image = bridge.imgmsg_to_cv2(img_msg, desired_encoding="passthrough")
+            cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)  # Assuming it's RGB-ish
+        else:
+            # Normal handling
+            cv_image = bridge.imgmsg_to_cv2(img_msg, desired_encoding="bgr8")
+
+        filename = f"frame_{i:05d}.jpg"
+        cv2.imwrite(os.path.join(output_dir, filename), cv_image)
+        print(f"Saved {filename}")
+
+    except Exception as e:
+        print(f"Frame {i} skipped due to error: {e}")
+
+
+conn.close()
+print(f"Saved {len(rows)} frames to '{output_dir}'")
